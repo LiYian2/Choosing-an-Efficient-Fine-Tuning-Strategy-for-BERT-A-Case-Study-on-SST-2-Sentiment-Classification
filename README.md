@@ -51,7 +51,7 @@ The codebase supports **full end-to-end reproduction** of all figures and tables
 
 ```text
 PJ/
-├── models/                     
+├── models/(Models Checkpoints Saved for GUI)                     
 │   ├── Full Finetune (FP16)/
 │   ├── Full Finetune (FP32)/
 │   ├── LoRA (FP16)/
@@ -59,6 +59,7 @@ PJ/
 │   └── QLoRA (4-bit)/
 │
 ├── notebooks/
+│   ├── student_model/(Student Model Checkpoints Saved for Data-Centric Experiments)
 │   ├── main.ipynb              
 │   └── experiments.ipynb      
 │
@@ -135,7 +136,7 @@ This notebook is **not required for real-time demonstration**, but supports **fu
 | LoRA (8-bit)   | INT8               | 8-bit        | ~0.8%           |
 | QLoRA (4-bit)  | INT4               | 4-bit        | ~1.3%           |
 
-All methods use the **same classifier head and tokenization pipeline** to ensure controlled comparison.
+All methods use the **same classifier head and tokenization pipeline** to ensure controlled comparison. Results are reported in our report.
 
 ---
 
@@ -154,6 +155,8 @@ We compare:
 * Only hard samples
 * Middle-only sampling
 * **Mixed-difficulty sampling (proposed)**
+
+Please refer to `notebooks/experiments.ipynb` Section 7 for implementation details of Mixed-difficulty sampling.
 
 ---
 
@@ -186,6 +189,15 @@ Implementation:
 src/transfer.py
 ```
 
+Running Command Example(after activating conda env):
+
+```bash
+cd src
+python -u "transfer.py"   --fp16   --num_workers 4   --batch_size 32 --lora_r 16
+```
+
+For more details, please refer to the docstrings and comments in `src/transfer.py`.
+
 ---
 
 ## 9. Gradio Interactive Evaluation System
@@ -211,7 +223,7 @@ This interface is designed for **non-technical stakeholders** to directly evalua
 ---
 
 ## 10. Installation
-
+For setup, create and activate a conda environment with Python>= 3.10 (We've tested on both Windows and Linux, on Python3.10 and Python3.13 on Google Colab), then install dependencies via:
 ```bash
 pip install -r requirements.txt
 ```
@@ -298,3 +310,134 @@ For real-world sentiment classification under limited resources:
 | **Boyi Zhang**   | Data-centric learning; scaling experiments; visualization; presentation slides; report writing                                          |
 | **Yunxiang Li**  | Gradio frontend implementation; full experiment reproduction; README documentation                                                      |
 
+## 15. Main Experimental Findings
+
+All findings summarized below are derived from controlled experiments on SST-2 with `bert-base-uncased`, under identical tokenization pipelines, classifier heads, optimization schedules, and training protocols. When applicable, results are averaged over multiple random seeds, with uncertainty estimated using bootstrap confidence intervals.
+
+### 15.1 Efficiency–Performance Trade-off
+
+Across all compared strategies:
+
++ LoRA (16-bit) consistently achieves comparable or slightly superior accuracy to full fine-tuning, while:
+  + Reducing training time to approximately 25–30%
+  + Reducing peak GPU memory usage to approximately 50%
+
++  QLoRA (4-bit) minimizes GPU memory consumption most aggressively, but introduces:
+
+  + Additional quantization and dequantization overhead
+
+  + Longer training time than LoRA (16-bit)
+
+  + LoRA (8-bit) provides limited benefit, as its memory savings are modest relative to QLoRA, while training time remains similar to full fine-tuning.
+
+**Conclusion:**
+For medium-scale backbones such as BERT-base, LoRA (16-bit) provides the best overall trade-off among efficiency, stability, and accuracy under practical resource constraints.
+
+## 15.2 Hyperparameter Sensitivity
+
++ Learning rate:
+
+  + Very small learning rates (≈ 1e-5) lead to underfitting.
+
+  + Performance stabilizes around 1e-4, with robust behavior across nearby values.
+
++ LoRA rank:
+
+  + Small ranks (e.g., r = 4) underfit.
+  + Large ranks (≥ 32) yield diminishing returns and mild overfitting.
+
+  + Rank r = 16 offers the best balance between expressiveness and efficiency.
+
+**Conclusion:**
+LoRA exhibits stable performance under moderate hyperparameter tuning, making it suitable for low-budget deployment scenarios where extensive grid search is infeasible.
+
+## 15.3 Robustness to Random Seeds and Input Noise
+
++ Multi-seed experiments show:
+
+  + Small variance in validation accuracy
+
+  + Highly overlapping 95% bootstrap confidence intervals
+
+  + Noise-augmented training (emoji insertion, character substitution, word deletion) causes less than 1% absolute performance degradation.
+
+**Conclusion:**
+The LoRA-based sentiment classifier is robust to both random initialization and realistic user-generated noise.
+
+## 15.4 Scaling Behavior and Few-Shot Learning
+
++ Zero-shot performance is near random guessing for all methods.
+
++ Rapid performance growth occurs between 100–1000 training samples.
+
++ Beyond approximately 1000 samples, validation accuracy quickly saturates.
+
++ LoRA shows higher variance in extremely low-shot regimes, due to freezing the backbone and optimizing only randomly initialized low-rank adapters.
+
+**Conclusion:**
+For SST-2–like clean classification tasks, approximately 1000 well-labeled samples are sufficient to approach full-data performance, and blindly increasing dataset size yields diminishing returns.
+
+## 15.5 Data-Centric Learning
+
++ Naïve difficulty-based strategies focusing on:
+
+  + Only easy samples
+
+  + Only hard samples
+
+  + Only medium-difficulty samples
+  
+  all result in degraded performance.
+
++ A mixed-difficulty sampling strategy, combining predominantly medium-difficulty samples with small proportions of both easy and hard examples, consistently outperforms uniform random sampling.
+
+**Conclusion:**
+Preserving the global data distribution is more important than aggressively filtering by perceived difficulty.
+
+## 15.6 Model Capacity and Overfitting
+
++ Training accuracy continues to rise with epochs, while validation accuracy plateaus early, indicating clear overfitting behavior.
+
++ Freezing large portions of lower BERT layers:
+
+  + Reduces trainable parameters by up to ~90%
+
+  + While validation accuracy decreases only marginally.
+
+**Conclusion:**
+For SST-2, full model capacity is not required, and a substantial portion of BERT’s lower layers is functionally redundant.
+
+## 15.7 Transfer Learning and Adapter Design
+
++ Transferring SST-2–trained LoRA adapters to MRPC:
+
+  + Significantly accelerates early-stage convergence
+
+  + Outperforms direct LoRA training on MRPC during early epochs
++ **Adapter placement plays a decisive role:**
+
+  + Adapters covering both attention and FFN layers exhibit the strongest transfer performance
+
+  + Extremely narrow adapters (e.g., Q-only or V-only) transfer poorly
+
+  + SVD-based stable-rank analysis shows:
+Higher effective rank of LoRA updates correlates with stronger cross-task transferability
+
+**Conclusion:**
+LoRA adapters are reusable across related tasks, but successful transfer critically depends on adapter placement and effective representational rank.
+
+## 15.8 Overall Practical Takeaway
+
+For real-world sentiment classification under constrained resources:
+
+✅ Prefer BERT + LoRA (16-bit)
+
+✅ Use LoRA rank ≈ 16 and learning rate ≈ 1e-4
+
+✅ Apply early stopping within 5–10 epochs
+
+✅ Invest in moderate-scale, clean labeled data (~1000 samples)
+
+✅ Use distribution-preserving data selection
+
+✅ Design adapters covering both attention and FFN layers to support future task transfer
